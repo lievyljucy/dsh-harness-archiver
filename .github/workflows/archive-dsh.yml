@@ -1,0 +1,184 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 lievyljucy
+#
+# 本 workflow 为本仓库原创实现；外部依赖仅为 GitHub 官方 Actions。
+name: Archive DeepSeek Harness releases
+
+on:
+  schedule:
+    # Poll the official feed every 15 minutes. GitHub may delay scheduled runs
+    # under load; workflow_dispatch is always available for an immediate check.
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      feeds:
+        description: 'Feed URL(s), comma or space separated'
+        required: false
+        default: 'https://download.deepseek.com/dsh-desk/feeds/win-x64/nightly.yml'
+      max_new:
+        description: 'Max versions archived per run (use 20 for first bootstrap)'
+        required: false
+        default: '2'
+      dry_run:
+        description: 'Only probe HTTP headers, do not download'
+        type: boolean
+        required: false
+        default: false
+      force:
+        description: 'Ignore ETag and refetch the feed'
+        type: boolean
+        required: false
+        default: false
+      no_backfill:
+        description: 'Skip historical version backfill'
+        type: boolean
+        required: false
+        default: false
+      probe_steps:
+        description: 'Bounded gap probing (0=off). Recommended 12: feed only exposes the staged version.'
+        required: false
+        default: '12'
+  push:
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/archive-dsh.yml'
+      - 'scripts/watch_dsh.py'
+      - 'backfill.txt'
+
+permissions:
+  contents: write
+
+# Serialise schedule + dispatch + push runs. cancel-in-progress:false so a
+# 300 MB upload is never killed by a newer poll.
+concurrency:
+  group: dsh-harness-archive-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Self-test (parser, digest, ETag, live feed)
+        shell: bash
+        run: python scripts/selftest.py
+
+      - name: Poll feed, download and verify new versions
+        id: watch
+        shell: bash
+        env:
+          FEEDS: ${{ inputs.feeds || 'https://download.deepseek.com/dsh-desk/feeds/win-x64/nightly.yml' }}
+          MAX_NEW: ${{ inputs.max_new || '2' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          FORCE: ${{ inputs.force }}
+          NO_BACKFILL: ${{ inputs.no_backfill }}
+          PROBE_STEPS: ${{ inputs.probe_steps || '12' }}
+        run: |
+          set -euo pipefail
+          args=(
+            --index state/versions.json
+            --etag-file state/etags.json
+            --cache-file state/cache.json
+            --out-dir dist
+            --max-new "$MAX_NEW"
+            --probe-steps "$PROBE_STEPS"
+          )
+          IFS=', ' read -ra FEED_ARR <<< "$FEEDS"
+          for f in "${FEED_ARR[@]}"; do
+            if [ -n "$f" ]; then args+=(--feed "$f"); fi
+          done
+          if [ "$NO_BACKFILL" != "true" ]; then args+=(--backfill backfill.txt); fi
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ "$FORCE" = "true" ]; then args+=(--force); fi
+          echo "python scripts/watch_dsh.py ${args[*]}"
+          python scripts/watch_dsh.py "${args[@]}"
+
+      - name: Publish each version as a permanent GitHub Release
+        if: steps.watch.outputs.changed == 'true'
+        shell: bash
+        env:
+          NEW_FILES: ${{ steps.watch.outputs.new_files }}
+          NEW_VERSIONS: ${{ steps.watch.outputs.new_versions }}
+        run: |
+          set -euo pipefail
+          echo "New versions: $NEW_VERSIONS"
+          mapfile -t files <<< "$NEW_FILES"
+          for f in "${files[@]}"; do
+            if [ -z "$f" ]; then continue; fi
+            if [[ ! "$(basename "$f")" =~ ^deepseek-harness-(.+)-win-x64\.exe$ ]]; then
+              echo "bad filename: $f"; exit 1
+            fi
+            v="${BASH_REMATCH[1]}"
+            notes="$f.notes.md"
+            echo "--- publishing $v from $f ---"
+            if gh release view "$v" >/dev/null 2>&1; then
+              echo "release $v already exists (retrying a partial upload)"
+            else
+              if [[ "$v" == *-* ]]; then
+                gh release create "$v" \
+                  --title "DeepSeek Harness $v" \
+                  --notes-file "$notes" \
+                  --target "${GITHUB_SHA}" \
+                  --prerelease
+              else
+                gh release create "$v" \
+                  --title "DeepSeek Harness $v" \
+                  --notes-file "$notes" \
+                  --target "${GITHUB_SHA}"
+              fi
+            fi
+            # --clobber makes this idempotent: a run that died mid-upload is retried.
+            gh release upload "$v" "$f" "$notes" --clobber
+
+            # Close the loop: the remote asset must exist and its size must equal
+            # the local, already-hash-verified file. Anything else fails the job
+            # so the next run re-publishes instead of trusting a truncated upload.
+            # Static jq expression: no shell interpolation inside jq, so no quoting
+            # or injection risk. Each Release holds exactly one .exe (notes is .md).
+            local_size="$(stat -c %s "$f")"
+            remote_size="$(gh release view "$v" --json assets \
+              --jq '[.assets[] | select(.name | endswith(".exe")) | .size] | max' \
+              2>/dev/null || true)"
+            echo "  local=$local_size remote=${remote_size:-<missing>}"
+            if [ "$remote_size" != "$local_size" ]; then
+              echo "asset size mismatch for $v; failing so next run retries" >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload version index (run artifact, NOT a commit)
+        # Deliberately does not commit anything back to the repository: every
+        # commit in this repo must be authored by the repository owner. The
+        # index is a disposable report, so it goes out as a run artifact.
+        if: always() && steps.watch.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: versions-index
+          path: state/versions.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Job summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### DSH archive run"
+            echo "- changed: \`${{ steps.watch.outputs.changed || 'n/a' }}\`"
+            echo "- new versions: \`${{ steps.watch.outputs.new_versions || '[]' }}\`"
+            echo "- feed: \`${{ inputs.feeds || 'https://download.deepseek.com/dsh-desk/feeds/win-x64/nightly.yml' }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

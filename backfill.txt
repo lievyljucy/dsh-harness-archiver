@@ -1,0 +1,13 @@
+# Verified on the official CDN via HTTP HEAD, re-checked 2026-11-16 03:16 UTC.
+# Exhaustive bounded enumeration (0.0.0..0.3.3, rc.0..rc.12) found exactly 9.
+# Note the gaps: rc.0 / rc.3 / rc.4 are 404 for some series, so the version
+# sequence is NOT contiguous. Never infer versions by incrementing.
+0.2.0-rc.1
+0.2.0-rc.2
+0.2.1-rc.1
+0.2.1-rc.2
+0.2.1-rc.3
+0.2.1-rc.5
+0.2.2-rc.1
+0.2.2-rc.2
+0.2.2-rc.3

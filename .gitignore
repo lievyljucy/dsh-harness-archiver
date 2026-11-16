@@ -1,0 +1,27 @@
+# Downloaded installers — never commit ~300 MB binaries to git.
+# Permanent storage is GitHub Releases, created by the workflow.
+dist/
+*.exe
+*.exe.part
+*.exe.notes.md
+
+# Scratch / local test state
+_test/
+_verify/
+_t/
+_e2e/
+_dry/
+_final/
+__pycache__/
+*.pyc
+
+# Local working notes, kept on disk but not part of this repository.
+_notes/
+
+# Runtime state (index / ETag / feed cache). The workflow keeps these inside the
+# run and publishes the index as a run artifact instead of committing it, so
+# that every commit in this repository stays authored by the repository owner.
+state/
+versions.json
+.feed-etags.json
+.feed-cache.json
