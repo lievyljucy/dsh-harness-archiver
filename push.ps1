@@ -21,7 +21,10 @@ param(
     [string]$RepoName  = 'dsh-harness-archiver',
     [switch]$Private,
     [switch]$SkipAuthCheck,
-    [switch]$NoCreateRepo
+    [switch]$NoCreateRepo,
+    [switch]$Direct,          # push straight to github.com; ON by default (proxy cred fails here)
+    [switch]$UseProxy,        # opt back into the global gh-proxy rewrite
+    [string]$ProjectDir = ''  # repo directory; defaults to this script's folder
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,8 +35,9 @@ function Ok([string]$msg)   { Write-Host "  OK  $msg" -ForegroundColor Green }
 function Die([string]$msg)  { Write-Host "  FAIL  $msg" -ForegroundColor Red; throw $msg }
 function Info([string]$msg) { Write-Host "  ..  $msg" -ForegroundColor Gray }
 
-$root = $PSScriptRoot
+$root = if ($ProjectDir) { (Resolve-Path -LiteralPath $ProjectDir).Path } else { $PSScriptRoot }
 Set-Location $root
+Ok "project dir: $root"
 
 Step '0. Locate tools'
 $git = (Get-Command git -ErrorAction SilentlyContinue).Source
@@ -90,13 +94,27 @@ sys.exit(1 if bad else 0)
 }
 
 Step '3. GitHub authentication'
+# gh needs GH_TOKEN. If nothing is set, try the Windows git credential manager
+# (this machine has a valid gho_ token for github.com there). Never print it.
+if (-not $env:GH_TOKEN -and -not $SkipAuthCheck) {
+    try {
+        $credIn = "protocol=https`nhost=github.com`n`n"
+        $credOut = $credIn | & $git credential fill 2>$null
+        $line = @($credOut | Where-Object { $_ -match '^password=' } | Select-Object -First 1)
+        if ($line.Count -gt 0 -and $line[0].Length -gt 9) {
+            $env:GH_TOKEN = $line[0].Substring(9)
+            Ok 'loaded GitHub token from git credential manager (not displayed)'
+        }
+    } catch { Info 'no credential-manager token available' }
+}
 if ($SkipAuthCheck) {
     Info 'auth check skipped by flag'
 } else {
     & $ghExe auth status 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-Host @'
-  gh is not logged in. Run this once, then re-run push.ps1:
+  gh is not logged in, and no usable credential-manager token was found.
+  Run this once, then re-run push.ps1:
 
       gh auth login
 
@@ -145,9 +163,23 @@ if ($existing) {
 }
 
 Step '5. Push'
-if ($PSCmdlet.ShouldProcess($fullRepo, 'git push -u origin main')) {
-    & $git push -u origin $branch
-    if ($LASTEXITCODE -ne 0) { Die "git push failed (exit $LASTEXITCODE). Check auth / repo name." }
+# This machine has a global `url.https://gh-proxy.com/...insteadOf https://github.com/`
+# rewrite whose stored credential fails. Verified working alternative: push
+# directly to github.com, letting the credential manager supply the gho_ token.
+# -Direct disables the rewrite for THIS call only; the global config is untouched.
+$useDirect = $Direct -or (-not $UseProxy)
+$pushArgs = @()
+if ($useDirect) {
+    $pushArgs += '-c'
+    $pushArgs += 'url.https://gh-proxy.com/https://github.com/.insteadOf='
+    Info 'Direct mode: github.com straight, global insteadOf rule left unchanged'
+} else {
+    Info 'UseProxy: honouring global gh-proxy rewrite'
+}
+if ($PSCmdlet.ShouldProcess($fullRepo, "git push -u origin $branch")) {
+    $env:GIT_TERMINAL_PROMPT = '0'
+    & $git @pushArgs push -u origin $branch
+    if ($LASTEXITCODE -ne 0) { Die "git push failed (exit $LASTEXITCODE). Try -Direct, or check auth / repo name." }
     Ok "pushed $branch -> origin/$branch"
 }
 & $git remote -v
