@@ -116,7 +116,8 @@ $fullRepo = "$RepoOwner/$RepoName"
 $remoteUrl = "https://github.com/$fullRepo.git"
 
 Step "4. Remote: $fullRepo"
-$existing = (& $git remote get-url origin 2>$null)
+$existing = (& $git remote get-url origin 2>$null | Select-Object -First 1)
+if ($LASTEXITCODE -ne 0) { $existing = $null }
 if ($existing) {
     Ok "origin already set: $existing"
 } else {
