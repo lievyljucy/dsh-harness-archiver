@@ -1,0 +1,19 @@
+# Downloaded installers — never commit ~300 MB binaries to git.
+# Permanent storage is GitHub Releases, created by the workflow.
+dist/
+*.exe
+*.exe.part
+*.exe.notes.md
+
+# Scratch / local test state
+_test/
+_verify/
+_t/
+_e2e/
+_dry/
+_final/
+__pycache__/
+*.pyc
+
+# State files ARE committed (they are tiny and drive ETag / retry logic):
+# versions.json, .feed-etags.json, .feed-cache.json
