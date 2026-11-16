@@ -148,7 +148,7 @@ if ($existing) {
     if (-not $NoCreateRepo) {
         if ($PSCmdlet.ShouldProcess($fullRepo, 'gh repo create')) {
             $vis = if ($Private) { '--private' } else { '--public' }
-            & $ghExe repo create $RepoName $vis --confirm
+            & $ghExe repo create $RepoName $vis
             if ($LASTEXITCODE -ne 0) { Die "gh repo create failed (exit $LASTEXITCODE)" }
             Ok "created $fullRepo"
         }
@@ -164,12 +164,22 @@ if ($existing) {
 
 Step '5. Push'
 # This machine has a global `url.https://gh-proxy.com/...insteadOf https://github.com/`
-# rewrite whose stored credential fails. Verified working alternative: push
-# directly to github.com, letting the credential manager supply the gho_ token.
-# -Direct disables the rewrite for THIS call only; the global config is untouched.
+# rewrite whose stored credential fails and hangs. Verified working alternative:
+# push straight to github.com with the credential manager's gho_ token.
+# `gh repo create` reads that global config and writes the ALREADY-REWRITTEN
+# proxy URL into origin, so normalise origin back to the canonical URL first.
 $useDirect = $Direct -or (-not $UseProxy)
 $pushArgs = @()
 if ($useDirect) {
+    $canon = "https://github.com/$fullRepo.git"
+    $cur = (& $git config --get remote.origin.url 2>$null | Select-Object -First 1)
+    if ($cur -and $cur -ne $canon) {
+        if ($PSCmdlet.ShouldProcess($canon, 'git remote set-url origin')) {
+            & $git remote set-url origin $canon
+            if ($LASTEXITCODE -ne 0) { Die 'failed to normalise origin URL' }
+            Ok "origin normalised: $cur -> $canon"
+        }
+    }
     $pushArgs += '-c'
     $pushArgs += 'url.https://gh-proxy.com/https://github.com/.insteadOf='
     Info 'Direct mode: github.com straight, global insteadOf rule left unchanged'
