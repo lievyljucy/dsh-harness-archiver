@@ -1,8 +1,18 @@
 # 实机验证报告
 
-时间：2026-11-13 14:47–15:14 (Asia/Shanghai) / 06:47–07:14 UTC
-环境：Windows，`dsh-primary-runtime` Python 3.12、Node、PowerShell；网络直连官方 CDN。
+时间：
+- 第一轮：2026-11-13 14:47–15:14 (Asia/Shanghai) / 06:47–07:14 UTC
+- **第二轮（push 前复测）：2026-11-16 11:15–11:26 (Asia/Shanghai) / 03:15–03:26 UTC**
+
+环境：Windows 10.0.19045、PowerShell 5.1、`dsh-primary-runtime` Python 3.12、
+Node、git 2.54.0 / bash 5.3.9 / gh 2.104.0；网络直连官方 CDN 与 github.com。
 原则：**每一条结论都附可复现命令与实测输出，不推断、不补写。**
+
+> **第二轮的重要发现**：feed 已从 `0.2.2-rc.1` 更新为 `0.2.2-rc.3`
+> （`releaseDate: 2026-11-13T07:31:42.937Z`），且 CDN 上新增了
+> `0.2.2-rc.3`。这个新版本恰好在首轮测试结束约 3 小时后发布 —— 直接验证
+> 「feed 只暴露当前灰度版本、必须每轮 gap probe」的设计是对的。
+> 详见 [§8 第二轮复测](#8-第二轮复测2026-11-16-push-前)。
 
 ---
 
@@ -10,9 +20,9 @@
 
 首版方案把 `nightly.yml` 当成完整版本清单。复核时做了穷举探测，结论是**这个前提是错的**：
 
-- `nightly.yml` 当前只指向 `0.2.2-rc.1`
-- 官方 CDN 上还存在 `0.2.1-rc.5` 和 `0.2.2-rc.2`，两者都不在 feed 里
-- 因此「只盯 feed」会永久漏掉版本，方案已按此修正（每轮 bounded gap probe）
+- 首轮 `nightly.yml` 只指向 `0.2.2-rc.1`，但 CDN 上还有 `0.2.1-rc.5`、`0.2.2-rc.2`
+- 第二轮 feed 已切到 `0.2.2-rc.3`，CDN 上共 9 个版本
+- 因此「只盯 feed」会漏版本，方案已按此修正（每轮 bounded gap probe）
 
 ---
 
@@ -237,12 +247,121 @@ python scripts/watch_dsh.py --dry-run --force --backfill backfill.txt --probe-st
 
 ## 7. 尚未做的验证（明确边界）
 
-- `0.2.2-rc.2` 与 `0.2.2-rc.1` 已完成全量下载 + 独立 SHA-512；其余 6 个历史包
-  只做了 HEAD（存在性 + 长度），**未逐个全量下载算哈希**。归档器在真正归档时
-  会对每个包流式计算 SHA-512 并写入 Release notes，此处不预先声称。
-- GitHub Release 创建/上传、`gh api` 远端 size 复核、`git push` 回写状态这几步需要
-  真实仓库与 `contents: write` 权限，本机无该环境，属于**未实机执行**的 CI 路径，
-  代码与 workflow 已按幂等 + 失败重试设计。
+- `0.2.2-rc.1`、`0.2.2-rc.2`、`0.2.2-rc.3` 已完成全量下载 + 独立 SHA-512；
+  其余 6 个历史包只做了 HEAD（存在性 + 长度），**未逐个全量下载算哈希**。
+  归档器在真正归档时会对每个包流式计算 SHA-512 并写入 Release notes，
+  此处不预先声称。
+- GitHub Release 创建/上传、`gh release view --json assets` 远端 size 复核、
+  `git push` 回写状态这几步需要真实仓库与 `contents: write` 权限，本机无该环境，
+  属于**未实机执行**的 CI 路径，代码与 workflow 已按幂等 + 失败重试设计。
+  `gh --jq` 的 jq 表达式已改为静态无变量形式，规避离线无法验证的变量注入。
 - gap probe 是有界的（`0.x.y` 已知 bases 的 `rc.0..rc.12` 及下一个 patch 的
   `rc.0..rc.2`）。若官方将来改用全新命名规则（如 `1.0.0-beta.1`），需扩展
   `gap_probe()` 的生成规则；脚本不会静默假装覆盖所有格式。
+
+---
+
+## 8. 第二轮复测（2026-11-16，push 前）
+
+### 8.1 官方源状态已变化（逐字取证）
+
+```
+GET https://download.deepseek.com/dsh-desk/feeds/win-x64/nightly.yml
+HTTP/1.1 200
+Content-Type: application/yaml        ← 首轮是 text/yaml
+Content-Length: 533
+ETag: "3c7d64d0476bf5891c31d24246a627da"   ← 首轮 1aafc4e0…
+Last-Modified: Fri, 13 Nov 2026 15:40:43 GMT
+Date: Mon, 16 Nov 2026 03:16:45 GMT
+Cache-Control: max-age=0
+Server: tencent-cos
+```
+
+```yaml
+version: 0.2.2-rc.3
+files:
+  - url: >-
+      https://download.deepseek.com/dsh-desk/bin/win-x64/deepseek-harness-0.2.2-rc.3-win-x64.exe
+    size: 299595752
+    sha512: >-
+      GiJf8kx+C7eoiZ0xQSYBcTyh5xmXQl+vh63U6uSm963McK1AkMgB8PydzuekWdUY7hyURvhVMHANM4pn+tCKzQ==
+path: >-
+  https://download.deepseek.com/dsh-desk/bin/win-x64/deepseek-harness-0.2.2-rc.3-win-x64.exe
+sha512: >-
+  GiJf8kx+C7eoiZ0xQSYBcTyh5xmXQl+vh63U6uSm963McK1AkMgB8PydzuekWdUY7hyURvhVMHANM4pn+tCKzQ==
+stagingPercentage: 100
+releaseDate: '2026-11-13T07:31:42.937Z'
+```
+
+**Content-Type 变化是一个真实边界**：PowerShell `Invoke-WebRequest` 对
+`application/yaml` 返回 `byte[]`（首轮 `text/yaml` 返回 string），直接打印会得到
+一串 ASCII 数字。脚本用 `r.read().decode("utf-8")` 读原始字节，与 Content-Type
+无关 —— 已实测解析结果完全正确。
+
+### 8.2 `0.2.2-rc.3` 独立全量校验
+
+```
+FEED_B64  = GiJf8kx+C7eoiZ0xQSYBcTyh5xmXQl+vh63U6uSm963McK1AkMgB8PydzuekWdUY7hyURvhVMHANM4pn+tCKzQ==
+EXPECTED  = 1a225ff24c7e0bb7a8899d31412601713ca1e71997425faf87add4eae4a6f7adcc70ad4090c801f0fc9dcee7a459d518ee1c9446f85530700d338a67fad08acd
+
+Invoke-WebRequest -OutFile deepseek-harness-0.2.2-rc.3-win-x64.exe
+ACTUAL_SIZE   = 299595752
+Get-FileHash -Algorithm SHA512
+ACTUAL_SHA512 = 1a225ff24c7e0bb7a8899d31412601713ca1e71997425faf87add4eae4a6f7adcc70ad4090c801f0fc9dcee7a459d518ee1c9446f85530700d338a67fad08acd
+VERDICT       = PASS (independent chain)
+```
+
+exe 响应头：`Content-Type: application/vnd.microsoft.portable-executable`、
+`ETag: "a00249bd408a1341c8c453294c03c506"`、
+`Last-Modified: Fri, 13 Nov 2026 08:08:00 GMT`、
+`x-cos-hash-crc64ecma: 6725580478689904086`；`.blockmap` 边车 200 / 311272 B。
+
+同时复测 8 个旧版本全部仍为 200；探测 `0.2.2-rc.4/.5`、`0.2.3*`、
+`0.3.0-rc.1`、`0.2.1-rc.6/.7` 全部 404。CDN 上共 **9** 个版本。
+
+### 8.3 完整回归测试结果（全通过）
+
+| 测试 | 结果 |
+| --- | --- |
+| `py_compile scripts/*.py` | exit 0 |
+| `selftest.py`（21 项，含拒绝路径 + 在线 feed 交叉校验） | 全 OK，exit 0；live version `0.2.2-rc.3`、size `299595752`、sha512 `1a225ff2…08acd`、ETag `3c7d64d0…`、304 正常 |
+| workflow YAML（js-yaml） | 5 顶层键、3 触发器、cron `*/15`、7 步、`probe_steps` 默认 12、`permissions contents: write` |
+| 全部 5 个 `run:` 块 `bash -n` | 全部 exit 0（用 Git Bash 5.3.9 校验，模拟 Linux runner） |
+| 全新状态 `--dry-run --force --backfill --probe-steps 12` | 9 个候选，与穷举一致；零文件写入 |
+| 真实归档 `--force --max-new 1` | `reuse+verified` 强制重算 SHA-512 = feed 值；写出 `versions.json` 与 `.notes.md`，exit 0 |
+| `git init -b main` + 提交 | 3 个 commits，工作区干净 |
+| `.gitignore` 生效 | `git check-ignore` 命中 `dist/` 与 `__pycache__/`；11 个跟踪文件全部 < 27 KB |
+| `.gitattributes` LF | 全部 11 个跟踪 blob `CR=0` |
+| `push.ps1` PowerShell 解析器 | 0 错误 |
+| `push.ps1 -WhatIf` 全流程 | exit 0，7 个步骤全部走通，`REMOTES=0`、`STATUS=0` 零副作用 |
+
+### 8.4 push 前修掉的 4 个真实缺陷
+
+1. `gh release create` 用空数组 `"${extra[@]}"` + `set -u` 有旧版 bash 兼容隐患
+   → 改为显式 if/else 两分支，不带数组。
+2. `gh api --jq ".assets[] | select(.name == \"$(basename "$f")\")"` 嵌套引号脆弱
+   → 改为 `gh release view "$v" --json assets --jq '[...] | max'` 静态表达式，
+   无 shell 插值、无变量注入。
+3. `--jq --arg n "$asset_name"` 不是 gh 支持的用法 → 已移除。
+4. `push.ps1` 中 `git remote get-url origin` 在 origin 不存在时向 stderr 输出，
+   在 `powershell -File` + `$ErrorActionPreference='Stop'` 下被当作终止错误
+   → 改用 `git remote` 列名字 + `git config --get`，WhatIf 第三次跑通。
+
+另外新增 `.gitattributes` 强制 LF，避免 Windows CRLF 让 Linux runner 上的 bash
+脚本带 `\r` 报错。
+
+### 8.5 工具链与仓库状态
+
+| 工具 | 版本 | 位置 |
+| --- | --- | --- |
+| git | `2.54.0.windows.1` | `C:\Users\Administrator\AppData\Local\hermes\git\cmd\git.exe` |
+| git-lfs | `3.7.1` | 同工具链（本项目未使用） |
+| bash | `5.3.9(1)-release` | `...\hermes\git\bin\bash.exe` |
+| gh | `2.104.0` | `C:\Users\Administrator\AppData\Local\hermes\gh\gh.exe`（本次新装，已持久化用户 PATH） |
+
+`git ls-remote https://github.com/git/git.git HEAD` → `7fb6055e678f…`（网络连通）。
+`gh auth status` → 未登录（需要用户自己的 GitHub 身份，故未代为 push）。
+
+本地仓库：`main`，3 个 commits，11 个跟踪文本文件，工作区干净，无 remote。
+上传流程见 [PUSH.md](PUSH.md)。
+
