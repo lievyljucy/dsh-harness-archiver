@@ -676,6 +676,10 @@ def main() -> int:
         "count": len(merged),
         "versions": [merged[k] for k in sorted(merged, key=version_sort_key)],
     }
+    # NOTE: persist() creates the parent dirs but is called AFTER this write,
+    # so the index parent must be created here first (state/ may not exist yet
+    # on a fresh runner / first run with a new version).
+    index_path.parent.mkdir(parents=True, exist_ok=True)
     index_path.write_text(json.dumps(index, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     persist()
 
